@@ -3,6 +3,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.util.Iterator;
 
 import org.apache.bcel.classfile.*;
@@ -72,7 +73,7 @@ public class ConstantFolder
 		InstructionList il = methodGen.getInstructionList();
 		InstructionFinder f = new InstructionFinder(il);
 		// Note: This pattern does not handle increment or negation operations. (Should we?)
-		String pattern = "LDC LDC ArithmeticInstruction";
+		String pattern = "(LDC|LDC2_W) (LDC|LDC2_W) ArithmeticInstruction";
 
 		// Info: InstructionHandle is a wrapper for actual Instructions
 
@@ -114,7 +115,7 @@ public class ConstantFolder
 
 			// Fold the constant by type.
 			Type   operatorType = operator.getType(cpgen);
-			String operationStr = operator.getName().substring(1);	// 'add', 'mul', 'sub', 'div'
+			String operationStr = operator.getName().substring(1);	// 'iadd', 'fmul', etc. -> 'add', 'mul', 'sub', 'div'
 
 			System.out.println("leftNum: " + leftNum + " rightNum: " + rightNum + " type: " + operatorType + " operation: " + operationStr);
 
@@ -137,11 +138,23 @@ public class ConstantFolder
 					cpIndex = cpgen.addDouble(foldedValue.doubleValue());
 				}
 
-				System.out.format("New constant pool entry with index %d and value %d.\n", cpIndex, foldedValue);
+				System.out.println("New constant pool entry with index " + cpIndex + " and value " + foldedValue);
 
 				if (cpIndex > -1) {
 					// Insert new LDC instruction to load from our new constant pool entry.
-					il.insert(match[0], new LDC(cpIndex));
+					//il.insert(match[0], new LDC(cpIndex));
+
+					// Use reflection to dynamically instantiate the right class.
+					Constructor<?> ldcConstructor;
+					CPInstruction cpInstruction = null;
+					try {
+						ldcConstructor = match[0].getInstruction().getClass().getConstructor(Integer.TYPE);
+						cpInstruction = (CPInstruction) ldcConstructor.newInstance(cpIndex);
+					} catch (Exception e) {
+						e.printStackTrace();
+					}
+					il.insert(match[0], cpInstruction);
+
 					try {
 						// Delete old instructions (LDC, LDC, OP)
 						il.delete(match[0], match[2]);
