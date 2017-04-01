@@ -430,7 +430,7 @@ public class ConstantFolder
 		// Instantiate a MethodGen from the existing method.
 		InstructionFinder f = new InstructionFinder(il);
 
-		String pattern = "(Instruction)* (StoreInstruction) | ((StoreInstruction) (Instruction)* (StoreInstruction))";
+		String pattern = "((StoreInstruction) (Instruction)* (StoreInstruction))";
 
 
 		int maxLocalVariableIndex = getHighestLocalVariableIndex(il);
@@ -470,23 +470,27 @@ public class ConstantFolder
 						if((startInstruction instanceof StoreInstruction) && (endInstruction instanceof StoreInstruction)){
 							if(startInstruction.equals(endInstruction) && ((StoreInstruction) startInstruction).getIndex() == currentVariableIndex){
 								System.out.println("Found matching ISTORES!");
-								InstructionList instructions = new InstructionList();
-								instructions = il.copy();
-								instructions.setPositions(true);
-								System.out.println(instructions);
-								InstructionHandle[] instructionHandleArray = instructions.getInstructionHandles();
-								for(int k = 0 ; k < instructionHandleArray.length; k++){
-									if(k < i || k > j) {
-										try {
-											instructions.delete(instructionHandleArray[k]);
-										} catch (TargetLostException e) {
-											e.printStackTrace();
-										}
-									}
-								}
-								System.out.println("Intermediet Instructions before folding " + instructions);
-								doConstantVariableFolding(cgen,cpgen,instructions);
-								System.out.println("Intermediet Instructions after folding " + instructions);
+								// InstructionList instructions = new InstructionList();
+								// instructions = il.copy();
+								// instructions.setPositions(true);
+								// System.out.println(instructions);
+								// InstructionHandle[] instructionHandleArray = instructions.getInstructionHandles();
+								// for(int k = 0 ; k < instructionHandleArray.length; k++){
+								// 	if(k < i || k > j) {
+								// 		try {
+								// 			instructions.delete(instructionHandleArray[k]);
+								// 		} catch (TargetLostException e) {
+								// 			e.printStackTrace();
+								// 		}
+								// 	}
+								// }
+								System.out.println("Intermediet Instructions before folding " + il);
+								System.out.println("I IS :" + i);
+								System.out.println("J IS :" + j);
+								System.out.println("I HANDLE IS :" + match[i]);
+								System.out.println("J HANDLE IS :" + match[j]);
+								doConstantVariableFolding(cgen, cpgen, il, match[i], match[j]);
+								System.out.println("Intermediet Instructions after folding " + il);
 
 							}
 						}
