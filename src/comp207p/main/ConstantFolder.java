@@ -4,6 +4,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 
@@ -37,7 +38,7 @@ public class ConstantFolder
 			e.printStackTrace();
 		}
 	}
-	
+
 	public void optimize()
 	{
 		ClassGen cgen = new ClassGen(original);
@@ -56,7 +57,7 @@ public class ConstantFolder
 			System.out.println("* Optimizing method " + m.getName() + "...");
 			optimizeMethod(cgen, cpgen, m);
 		}
-        
+
 		this.optimized = cgen.getJavaClass();
 	}
 
@@ -407,6 +408,77 @@ public class ConstantFolder
 	}
 
 	private void doDynamicVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
+		System.out.println("* * Optimization 03: Dynamic Variable Folding --------------");
+
+		// Instantiate a MethodGen from the existing method.
+		InstructionFinder f = new InstructionFinder(il);
+
+		String pattern = "(Instruction)* (StoreInstruction) | ((StoreInstruction) (Instruction)* (StoreInstruction))";
+
+
+		int maxLocalVariableIndex = getHighestLocalVariableIndex(il);
+		// System.out.println("Highest local variable index is " + maxLocalVariableIndex);
+
+		// Work on optimizing variable in order
+		for(int currentVariableIndex = 1; currentVariableIndex <= maxLocalVariableIndex; currentVariableIndex++){
+			ArrayList<Instruction> storeInstructions = new ArrayList<Instruction>();
+			System.out.println("Optimizing index : " + currentVariableIndex);
+			for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
+				InstructionHandle[] match = (InstructionHandle[]) it.next();
+
+				// We first optimize regions before the assignment of the current variable
+				for(int i = 0; i < match.length; i++){
+					InstructionList instructions = new InstructionList();
+					if ((match[i].getInstruction() instanceof StoreInstruction)) {
+						//System.out.println("I am a store instruction!");
+						if (((StoreInstruction) match[i].getInstruction()).getIndex() == currentVariableIndex) {
+							//System.out.println("Correct Index!");
+							for (int j = 0; j <= i; j++) {
+								//storeInstructions.add(match[j].getInstruction());
+								instructions.insert(match[j].getInstruction());
+								// System.out.println("Initial instructions before folding" + instructions);
+								doConstantVariableFolding(cgen,cpgen,instructions);
+							}
+							//System.out.println("Initial instructions after folding" + instructions);
+							break;
+						}
+					}
+				}
+
+				// Regions between two similar istores
+				for(int i = 0; i < match.length-1; i++){
+					Instruction startInstruction = match[i].getInstruction();
+					for (int j = i+1; j < match.length; j++){
+						Instruction endInstruction = match[j].getInstruction();
+						if((startInstruction instanceof StoreInstruction) && (endInstruction instanceof StoreInstruction)){
+							if(startInstruction.equals(endInstruction) && ((StoreInstruction) startInstruction).getIndex() == currentVariableIndex){
+								System.out.println("Found matching ISTORES!");
+								InstructionList instructions = il.copy();
+								instructions.setPositions(true);
+								System.out.println(instructions);
+								InstructionHandle[] instructionHandleArray = instructions.getInstructionHandles();
+								for(int k = 0 ; k < instructionHandleArray.length; k++){
+									if(k <= i || k > j){
+										try {
+											instructions.delete(instructionHandleArray[k]);
+										} catch (TargetLostException e) {
+											e.printStackTrace();
+										}
+									}
+								}
+								System.out.println("Instruction Shit " + instructions);
+								System.out.println("Intermediet Instructions before folding " + instructions);
+								doConstantVariableFolding(cgen,cpgen,instructions);
+								System.out.println("Intermediet Instructions after folding " + instructions);
+
+							}
+						}
+					}
+				}
+			}
+		}
+
+
 
 	}
 
@@ -462,6 +534,23 @@ public class ConstantFolder
 				break;
 		}
 		return result;
+	}
+
+	public int getHighestLocalVariableIndex(InstructionList il){
+		InstructionFinder f = new InstructionFinder(il);
+		String pattern = "(Instruction)*";
+		int highestCount  = 0;
+		for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
+			InstructionHandle[] match = (InstructionHandle[]) it.next();
+			for(int i = 0; i < match.length; i++){
+				if(match[i].getInstruction() instanceof StoreInstruction){
+					if(((StoreInstruction) match[i].getInstruction()).getIndex() > highestCount){
+						highestCount = ((StoreInstruction) match[i].getInstruction()).getIndex();
+					}
+				}
+			}
+		}
+		return highestCount;
 	}
 
 
