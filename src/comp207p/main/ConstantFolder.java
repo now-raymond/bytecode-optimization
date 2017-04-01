@@ -426,24 +426,24 @@ public class ConstantFolder
 			for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
 				InstructionHandle[] match = (InstructionHandle[]) it.next();
 
-				// We first optimize regions before the assignment of the current variable
-				for(int i = 0; i < match.length; i++){
-					InstructionList instructions = new InstructionList();
-					if ((match[i].getInstruction() instanceof StoreInstruction)) {
-						//System.out.println("I am a store instruction!");
-						if (((StoreInstruction) match[i].getInstruction()).getIndex() == currentVariableIndex) {
-							//System.out.println("Correct Index!");
-							for (int j = 0; j <= i; j++) {
-								//storeInstructions.add(match[j].getInstruction());
-								instructions.insert(match[j].getInstruction());
-								// System.out.println("Initial instructions before folding" + instructions);
-								doConstantVariableFolding(cgen,cpgen,instructions);
-							}
-							//System.out.println("Initial instructions after folding" + instructions);
-							break;
-						}
-					}
-				}
+				// // We first optimize regions before the assignment of the current variable
+				// for(int i = 0; i < match.length; i++){
+				// 	InstructionList instructions = new InstructionList();
+				// 	if ((match[i].getInstruction() instanceof StoreInstruction)) {
+				// 		//System.out.println("I am a store instruction!");
+				// 		if (((StoreInstruction) match[i].getInstruction()).getIndex() == currentVariableIndex) {
+				// 			//System.out.println("Correct Index!");
+				// 			for (int j = 0; j <= i; j++) {
+				// 				//storeInstructions.add(match[j].getInstruction());
+				// 				instructions.insert(match[j].getInstruction());
+				// 				// System.out.println("Initial instructions before folding" + instructions);
+				// 				doConstantVariableFolding(cgen,cpgen,instructions);
+				// 			}
+				// 			//System.out.println("Initial instructions after folding" + instructions);
+				// 			break;
+				// 		}
+				// 	}
+				// }
 
 				// Regions between two similar istores
 				for(int i = 0; i < match.length-1; i++){
@@ -453,12 +453,13 @@ public class ConstantFolder
 						if((startInstruction instanceof StoreInstruction) && (endInstruction instanceof StoreInstruction)){
 							if(startInstruction.equals(endInstruction) && ((StoreInstruction) startInstruction).getIndex() == currentVariableIndex){
 								System.out.println("Found matching ISTORES!");
-								InstructionList instructions = il.copy();
+								InstructionList instructions = new InstructionList();
+								instructions = il.copy();
 								instructions.setPositions(true);
 								System.out.println(instructions);
 								InstructionHandle[] instructionHandleArray = instructions.getInstructionHandles();
 								for(int k = 0 ; k < instructionHandleArray.length; k++){
-									if(k <= i || k > j){
+									if(k < i || k > j) {
 										try {
 											instructions.delete(instructionHandleArray[k]);
 										} catch (TargetLostException e) {
@@ -466,7 +467,6 @@ public class ConstantFolder
 										}
 									}
 								}
-								System.out.println("Instruction Shit " + instructions);
 								System.out.println("Intermediet Instructions before folding " + instructions);
 								doConstantVariableFolding(cgen,cpgen,instructions);
 								System.out.println("Intermediet Instructions after folding " + instructions);
