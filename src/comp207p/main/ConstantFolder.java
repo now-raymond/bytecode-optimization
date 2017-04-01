@@ -62,138 +62,16 @@ public class ConstantFolder
 
 
 	private void optimizeMethod(ClassGen cgen, ConstantPoolGen cpgen, Method m) {
-		doSimpleFolding(cgen, cpgen, m);
-		doConstantVariableFolding(cgen, cpgen, m);
-		doDynamicVariableFolding(cgen, cpgen, m);
-	}
-
-	private void doSimpleFolding(ClassGen cgen, ConstantPoolGen cpgen, Method m) {
-		System.out.println("* * Optimization 01: Simple Folding --------------");
-
-		// Instantiate a MethodGen from the existing method.
+		// 1. Instantiate a MethodGen from the existing method.
 		MethodGen methodGen = new MethodGen(m, cgen.getClassName(), cpgen);
-
 		InstructionList il = methodGen.getInstructionList();
 
-		boolean optimizationPerformed;
-		do {
-			InstructionFinder f = new InstructionFinder(il);
-			// Note: This pattern does not handle increment or negation operations. (Should we?)
-			String pattern = "(LDC|LDC2_W) (LDC|LDC2_W) ArithmeticInstruction";
-			// TODO
-			//String pattern = "(LDC|LDC2_W|ConstantPushInstruction) (LDC|LDC2_W|ConstantPushInstruction) ArithmeticInstruction";
+		// 2. Perform optimizations.
+		doSimpleFolding(cgen, cpgen, il);
+		doConstantVariableFolding(cgen, cpgen, il);
+		doDynamicVariableFolding(cgen, cpgen, il);
 
-			// Info: InstructionHandle is a wrapper for actual Instructions
-
-			optimizationPerformed = false;
-			for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
-				InstructionHandle[] match = (InstructionHandle[]) it.next();
-
-				System.out.println("Instruction len: " + match.length);
-				for (InstructionHandle ih : match) {
-					System.out.println("Instruction: " + ih.getInstruction().getClass().getSimpleName());
-				}
-
-				CPInstruction leftOperand, rightOperand;
-				ArithmeticInstruction operator;
-
-				// TODO
-				/*if (match[0].getInstruction() instanceof ConstantPushInstruction) {
-
-				} else {
-
-				}
-
-				if (match[1].getInstruction() instanceof ConstantPushInstruction) {
-
-				} else {
-
-				}*/
-
-				// match[0] expected to be LDC, as specified in the pattern.
-				leftOperand = (CPInstruction) match[0].getInstruction();
-
-				// match[1] expected to be LDC, as specified in the pattern.
-				rightOperand = (CPInstruction) match[1].getInstruction();
-
-				// match[2] expected to be ArithmeticInstruction, as specified in the pattern.
-				operator = (ArithmeticInstruction) match[2].getInstruction();
-
-				// Assert that we have the right types.
-				assert (leftOperand != null && rightOperand != null && operator != null) : "Operands or operator of unexpected type!";
-
-				// Assert that both operands have natural values (i.e. numbers).
-				assert cpgen.getConstant(leftOperand.getIndex()) instanceof ConstantObject;
-				assert cpgen.getConstant(rightOperand.getIndex()) instanceof ConstantObject;
-
-				// Grab the constants from the constant pool.
-				ConstantObject leftConst = (ConstantObject) cpgen.getConstant(leftOperand.getIndex());
-				ConstantObject rightConst = (ConstantObject) cpgen.getConstant(rightOperand.getIndex());
-
-				Number leftNum, rightNum;
-
-				leftNum = (Number) leftConst.getConstantValue(cpgen.getConstantPool());
-				rightNum = (Number) rightConst.getConstantValue(cpgen.getConstantPool());
-
-				// Fold the constant by type.
-				Type operatorType = operator.getType(cpgen);
-				String operationStr = operator.getName().substring(1);    // 'iadd', 'fmul', etc. -> 'add', 'mul', 'sub', 'div'
-
-				System.out.println("leftNum: " + leftNum + " rightNum: " + rightNum + " type: " + operatorType + " operation: " + operationStr);
-
-				Number foldedValue = doArithmeticOperation(leftNum, rightNum, operatorType, operationStr);
-
-				if (foldedValue != null) {
-					System.out.println("Folded value: " + foldedValue + " type: " + foldedValue.getClass().getName());
-
-					// The index of the new value
-					int cpIndex = -1;
-
-					// Add result to constant pool.
-					if (operatorType == Type.INT) {
-						cpIndex = cpgen.addInteger(foldedValue.intValue());
-					} else if (operatorType == Type.LONG) {
-						cpIndex = cpgen.addLong(foldedValue.longValue());
-					} else if (operatorType == Type.FLOAT) {
-						cpIndex = cpgen.addFloat(foldedValue.floatValue());
-					} else if (operatorType == Type.DOUBLE) {
-						cpIndex = cpgen.addDouble(foldedValue.doubleValue());
-					}
-
-					System.out.println("New constant pool entry with index " + cpIndex + " and value " + foldedValue);
-
-					if (cpIndex > -1) {
-						// Insert new LDC instruction to load from our new constant pool entry.
-						//il.insert(match[0], new LDC(cpIndex));
-
-						// Use reflection to dynamically instantiate the right class.
-						Constructor<?> ldcConstructor;
-						CPInstruction cpInstruction = null;
-						try {
-							ldcConstructor = match[0].getInstruction().getClass().getConstructor(Integer.TYPE);
-							cpInstruction = (CPInstruction) ldcConstructor.newInstance(cpIndex);
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-						il.insert(match[0], cpInstruction);
-
-						try {
-							// Delete old instructions (LDC, LDC, OP)
-							il.delete(match[0], match[2]);
-						} catch (TargetLostException e) {
-							e.printStackTrace();
-						}
-
-						optimizationPerformed = true;
-						System.out.println("Optimization performed.");
-					}
-
-				} else {
-					System.out.format("WARNING: Folding fallthrough. Unsupported type %s - no optimization performed.\n", operatorType);
-				}
-			}
-		} while (optimizationPerformed);
-
+		// 3. Replace method.
 		// setPositions(true) checks whether jump handles
 		// are all within the current method
 		il.setPositions(true);
@@ -212,7 +90,149 @@ public class ConstantFolder
 		il.dispose();
 	}
 
-	private void doConstantVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, Method m) {
+	private void doSimpleFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
+		System.out.println("* * Optimization 01: Simple Folding --------------");
+
+		boolean optimizationPerformed;
+		do {
+			InstructionFinder f = new InstructionFinder(il);
+			// ConstantPushInstruction: BIPUSH, SIPUSH, ICONST, etc.
+			// ConversionInstruction: I2D, D2F, etc.
+			String pattern = "(LDC|LDC2_W|ConstantPushInstruction) (LDC|LDC2_W|ConstantPushInstruction) ConversionInstruction? ArithmeticInstruction";
+
+			// Info: InstructionHandle is a wrapper for actual Instructions
+
+			optimizationPerformed = false;
+			for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
+				InstructionHandle[] match = (InstructionHandle[]) it.next();
+
+				System.out.println("Instruction len: " + match.length);
+				for (InstructionHandle ih : match) {
+					System.out.println("Instruction: " + ih.getInstruction().getClass().getSimpleName());
+				}
+
+				Number leftNum = null;
+				Number rightNum = null;
+				ArithmeticInstruction operator;
+				ConversionInstruction conversionInstruction = null;	// May be null
+
+				// Check type of left operand.
+				if (match[0].getInstruction() instanceof ConstantPushInstruction) {
+					leftNum = ((ConstantPushInstruction) match[0].getInstruction()).getValue();
+				} else if (match[0].getInstruction() instanceof LDC) {
+					leftNum = (Number) ((LDC) match[0].getInstruction()).getValue(cpgen);
+				} else if (match[0].getInstruction() instanceof LDC2_W) {
+					leftNum = (Number) ((LDC2_W) match[0].getInstruction()).getValue(cpgen);
+				}
+
+				// Check type of right operand.
+				if (match[1].getInstruction() instanceof ConstantPushInstruction) {
+					rightNum = ((ConstantPushInstruction) match[1].getInstruction()).getValue();
+				} else if (match[1].getInstruction() instanceof LDC) {
+					rightNum = (Number) ((LDC) match[1].getInstruction()).getValue(cpgen);
+				} else if (match[1].getInstruction() instanceof LDC2_W) {
+					rightNum = (Number) ((LDC2_W) match[1].getInstruction()).getValue(cpgen);
+				}
+
+				// Check if optional ConversionInstruction is present.
+				if (match[2].getInstruction() instanceof ConversionInstruction) {
+					conversionInstruction = (ConversionInstruction) match[2].getInstruction();
+
+					// match[3] expected to be ArithmeticInstruction, as specified in the pattern.
+					operator = (ArithmeticInstruction) match[3].getInstruction();
+				} else {
+					// Optional ConversionInstruction not present.
+					// match[2] expected to be ArithmeticInstruction, as specified in the pattern.
+					operator = (ArithmeticInstruction) match[2].getInstruction();
+				}
+
+				// Assert that we have the right types.
+				if (leftNum == null || rightNum == null || operator == null) {
+					System.err.println("FATAL: Operands or operator of unexpected type!");
+				};
+
+				// Fold the constant by type.
+				Type operatorType = operator.getType(cpgen);
+				String operationStr = operator.getName().substring(1);    // 'iadd', 'fmul', etc. -> 'add', 'mul', 'sub', 'div'
+
+				System.out.println("leftNum: " + leftNum + " rightNum: " + rightNum + " type: " + operatorType + " operation: " + operationStr);
+
+				Number foldedValue = doArithmeticOperation(leftNum, rightNum, operatorType, operationStr);
+
+				if (foldedValue != null) {
+					System.out.println("Folded value: " + foldedValue + " type: " + foldedValue.getClass().getName());
+
+					// The index of the new value
+					int cpIndex = -1;
+
+					// Add result to constant pool.
+					if (operatorType == Type.INT) {
+						cpIndex = cpgen.addInteger(foldedValue.intValue());
+					} else if (operatorType == Type.FLOAT) {
+						cpIndex = cpgen.addFloat(foldedValue.floatValue());
+					} else if (operatorType == Type.LONG) {
+						cpIndex = cpgen.addLong(foldedValue.longValue());
+					} else if (operatorType == Type.DOUBLE) {
+						cpIndex = cpgen.addDouble(foldedValue.doubleValue());
+					}
+
+					System.out.println("New constant pool entry with index " + cpIndex + " and value " + foldedValue);
+
+					if (cpIndex > -1) {
+						// Insert new LDC instruction to load from our new constant pool entry.
+
+						InstructionHandle instructionAddedHandle = null;
+						if (operatorType == Type.INT || operatorType == Type.FLOAT) {
+							instructionAddedHandle = il.insert(match[0], new LDC(cpIndex));
+						} else if (operatorType == Type.LONG || operatorType == Type.DOUBLE) {
+							instructionAddedHandle = il.insert(match[0], new LDC2_W(cpIndex));
+						}
+
+						// Use reflection to dynamically instantiate the right class.
+						/*Constructor<?> ldcConstructor;
+						CPInstruction cpInstruction = null;
+						try {
+							ldcConstructor = match[0].getInstruction().getClass().getConstructor(Integer.TYPE);
+							cpInstruction = (CPInstruction) ldcConstructor.newInstance(cpIndex);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+						il.insert(match[0], cpInstruction);*/
+
+						try {
+							// Delete old instructions (LDC, LDC, OP)
+							il.delete(match[0], match[2]);
+
+							// If optional ConversionInstruction was present, delete one more.
+							if (conversionInstruction != null) {
+								il.delete(match[3]);
+							}
+						} catch (TargetLostException e) {
+							for (InstructionHandle target : e.getTargets()) {
+								for (InstructionTargeter targeter : target.getTargeters()) {
+									if (instructionAddedHandle != null) {
+										targeter.updateTarget(target, instructionAddedHandle);
+									} else {
+										System.err.println("Failed to fix targets to this instruction");
+										e.printStackTrace();
+									}
+								}
+							}
+							//e.printStackTrace();
+						}
+
+						optimizationPerformed = true;
+						System.out.println("Optimization performed.");
+					}
+
+				} else {
+					System.out.format("WARNING: Folding fallthrough. Unsupported type %s - no optimization performed.\n", operatorType);
+				}
+			}
+		} while (optimizationPerformed);
+	}
+
+	private void doConstantVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
 		System.out.println("* * Optimization 02: Constant Variable Folding --------------");
 
 		// This hashmap stores all literal values that we know about.
@@ -222,28 +242,34 @@ public class ConstantFolder
 		// constantVariables.get(index) is TRUE if the variable is constant.
 		HashMap<Integer, Boolean> constantVariables = new HashMap<>();
 
-		// Instantiate a MethodGen from the existing method.
-		MethodGen methodGen = new MethodGen(m, cgen.getClassName(), cpgen);
-
-		InstructionList il = methodGen.getInstructionList();
-		InstructionFinder f = new InstructionFinder(il);
-
 		// Locate constant local variables that do not change for this method.
-		String pattern = "StoreInstruction";
+		InstructionFinder f = new InstructionFinder(il);
+		String pattern = "StoreInstruction | IINC";
 		for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
 			InstructionHandle[] match = (InstructionHandle[]) it.next();
 
-			// match[0] expected to be StoreInstruction, as specified in the pattern.
-			StoreInstruction storeInstruction = (StoreInstruction) match[0].getInstruction();
+			int localVariableIndex = -1;
 
-			System.out.format("storeInstruction: %s index: %s\n", storeInstruction.getClass().getSimpleName(), storeInstruction.getIndex());
+			// match[0] expected to be StoreInstruction or IINC, as specified in the pattern.
+			if (match[0].getInstruction() instanceof StoreInstruction) {
+				localVariableIndex = ((StoreInstruction) match[0].getInstruction()).getIndex();
+			} else if (match[0].getInstruction() instanceof IINC) {
+				localVariableIndex = ((IINC) match[0].getInstruction()).getIndex();
+			}
+
+			// Assert we've assigned a value to localVariableIndex.
+			if (localVariableIndex == -1) {
+				System.err.println("FATAL: doConstantVariableFolding: localVariableIndex not assigned.");
+			}
+
+			System.out.format("storeInstruction: %s index: %s\n", match[0].getInstruction().getClass().getSimpleName(), localVariableIndex);
 
 			// See if we've already tracked this local variable.
-			if (!constantVariables.containsKey(storeInstruction.getIndex())) {
-				constantVariables.put(storeInstruction.getIndex(), true);
+			if (!constantVariables.containsKey(localVariableIndex)) {
+				constantVariables.put(localVariableIndex, true);
 			} else {
 				// We've seen this index before.. mark it as NOT constant.
-				constantVariables.put(storeInstruction.getIndex(), false);
+				constantVariables.put(localVariableIndex, false);
 			}
 		}
 
@@ -251,7 +277,7 @@ public class ConstantFolder
 		boolean foldedLoadInstruction;
 		do {
 			// Run simple folding to get as many literals as possible.
-			doSimpleFolding(cgen, cpgen, m);
+			doSimpleFolding(cgen, cpgen, il);
 
 			// Store all literals in the hashmap.
 			// e.g. LDC #2, ISTORE_1
@@ -286,7 +312,9 @@ public class ConstantFolder
 				}
 
 				// Assert that we've assigned a value to literalValue.
-				assert literalValue != null;
+				if (literalValue == null) {
+					System.err.format("FATAL: Could not obtain literal value for unknown type %s.\n", pushInstruction.getClass().getSimpleName());
+				}
 
 				System.out.format("pushInstruction: %s storeInstruction: %s index: %d value: %f\n", pushInstruction.getClass().getSimpleName(), storeInstruction.getClass().getSimpleName(), storeInstruction.getIndex(), literalValue.doubleValue());
 
@@ -310,16 +338,16 @@ public class ConstantFolder
 				// Check if the index exists in the hashmap.
 				if (literalValues.containsKey(loadInstruction.getIndex())) {
 					// Yes, it does!
-					// TODO: Replace the LoadInstruction with the literal value.
+					// Replace the LoadInstruction with the literal value.
 
 					Number literalValue = literalValues.get(loadInstruction.getIndex());
 
 					Instruction instructionAdded = null;
 
 					if (loadInstruction.getType(cpgen) == Type.INT) {
-						if (Math.abs(literalValue.intValue()) < Byte.MAX_VALUE) {
+						if (false && Math.abs(literalValue.intValue()) < Byte.MAX_VALUE) {
 							instructionAdded = new BIPUSH(literalValue.byteValue());
-						} else if (Math.abs(literalValue.intValue()) < Short.MAX_VALUE) {
+						} else if (false && Math.abs(literalValue.intValue()) < Short.MAX_VALUE) {
 							instructionAdded = new SIPUSH(literalValue.shortValue());
 						} else {
 							// We need to add to the constant pool.
@@ -339,13 +367,18 @@ public class ConstantFolder
 					// Assert that there's an instruction to add.
 					assert instructionAdded != null;
 
-					il.insert(match[0], instructionAdded);
+					InstructionHandle instructionAddedHandle = il.insert(match[0], instructionAdded);
 
 					try {
 						// Delete old instructions (loadInstruction)
 						il.delete(match[0]);
 					} catch (TargetLostException e) {
-						e.printStackTrace();
+						for (InstructionHandle target : e.getTargets()) {
+							for (InstructionTargeter targeter : target.getTargeters()) {
+								targeter.updateTarget(target, instructionAddedHandle);
+							}
+						}
+						//e.printStackTrace();
 					}
 
 					foldedLoadInstruction = true;
@@ -355,25 +388,25 @@ public class ConstantFolder
 			}
 		} while (foldedLoadInstruction);
 
-		// setPositions(true) checks whether jump handles
-		// are all within the current method
-		il.setPositions(true);
-
-		// Recompute max stack/locals.
-		methodGen.setMaxStack();
-		methodGen.setMaxLocals();
-
-		// Generate the new method.
-		Method newMethod = methodGen.getMethod();
-
-		// Replace the method in the original class.
-		cgen.replaceMethod(m, newMethod);
-
-		// Dispose so that instruction handles can be reused. (Just good practice.)
-		il.dispose();
+//		// setPositions(true) checks whether jump handles
+//		// are all within the current method
+//		il.setPositions(true);
+//
+//		// Recompute max stack/locals.
+//		methodGen.setMaxStack();
+//		methodGen.setMaxLocals();
+//
+//		// Generate the new method.
+//		Method newMethod = methodGen.getMethod();
+//
+//		// Replace the method in the original class.
+//		cgen.replaceMethod(m, newMethod);
+//
+//		// Dispose so that instruction handles can be reused. (Just good practice.)
+//		il.dispose();
 	}
 
-	private void doDynamicVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, Method m) {
+	private void doDynamicVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
 
 	}
 
