@@ -68,7 +68,7 @@ public class ConstantFolder
 
 		// 2. Perform optimizations.
 		doSimpleFolding(cgen, cpgen, il);
-		doConstantVariableFolding(cgen, cpgen, il);
+		doConstantVariableFolding(cgen, cpgen, il, null, null);
 		doDynamicVariableFolding(cgen, cpgen, il);
 
 		// 3. Replace method.
@@ -232,8 +232,21 @@ public class ConstantFolder
 		} while (optimizationPerformed);
 	}
 
-	private void doConstantVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
+	/**
+	 * Performs constant variable folding optimization.
+	 * Pass NULL to startHandle and endHandle to have them automatically generated from the instruction list.
+	 * If specified, search starts at startHandle (inclusive), and ends at endHandle (inclusive).
+     */
+	private void doConstantVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il, InstructionHandle startHandle, InstructionHandle endHandle) {
 		System.out.println("* * Optimization 02: Constant Variable Folding --------------");
+
+		// Fill defaults
+		if (startHandle == null) {
+			startHandle = il.getStart();
+		}
+		if (endHandle == null) {
+			endHandle = il.getEnd();
+		}
 
 		// This hashmap stores all literal values that we know about.
 		HashMap<Integer,Number> literalValues = new HashMap<>();
@@ -245,8 +258,12 @@ public class ConstantFolder
 		// Locate constant local variables that do not change for this method.
 		InstructionFinder f = new InstructionFinder(il);
 		String pattern = "StoreInstruction | IINC";
-		for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
+		for (Iterator it = f.search(pattern, startHandle); it.hasNext(); /* empty increment */) {
 			InstructionHandle[] match = (InstructionHandle[]) it.next();
+
+			if (match[0].getPosition() > endHandle.getPosition()) {
+				continue;
+			}
 
 			int localVariableIndex = -1;
 
@@ -294,7 +311,7 @@ public class ConstantFolder
 				StoreInstruction storeInstruction = (StoreInstruction) match[1].getInstruction();
 
 				// Check if this store instruction is for a constant variable.
-				if (!constantVariables.get(storeInstruction.getIndex())) {
+				if (!constantVariables.containsKey(storeInstruction.getIndex()) || !constantVariables.get(storeInstruction.getIndex())) {
 					// If the variable isn't constant, skip this iteration.
 					continue;
 				}
