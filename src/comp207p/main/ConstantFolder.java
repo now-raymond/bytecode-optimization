@@ -456,11 +456,11 @@ public class ConstantFolder
 							doConstantVariableFolding(cgen, cpgen, il, match[i+1], match[j]);
 							il.setPositions(true);
 							System.out.println("Intermediet Instructions after folding " + il);
-							}
 						}
 					}
 				}
 			}
+		}
 	}
 
 	// ===========================
