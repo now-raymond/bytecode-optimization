@@ -432,7 +432,6 @@ public class ConstantFolder
 
 		String pattern = "((StoreInstruction) (Instruction)* (StoreInstruction))";
 
-
 		int maxLocalVariableIndex = getHighestLocalVariableIndex(il);
 		// System.out.println("Highest local variable index is " + maxLocalVariableIndex);
 
