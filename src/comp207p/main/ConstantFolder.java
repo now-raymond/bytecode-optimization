@@ -99,7 +99,7 @@ public class ConstantFolder
 			InstructionFinder f = new InstructionFinder(il);
 			// ConstantPushInstruction: BIPUSH, SIPUSH, ICONST, etc.
 			// ConversionInstruction: I2D, D2F, etc.
-			String pattern = "(LDC|LDC2_W|ConstantPushInstruction) (LDC|LDC2_W|ConstantPushInstruction) ConversionInstruction? ArithmeticInstruction";
+			String pattern = "(LDC|LDC2_W|ConstantPushInstruction) ConversionInstruction? (LDC|LDC2_W|ConstantPushInstruction) ConversionInstruction? ArithmeticInstruction";
 
 			// Info: InstructionHandle is a wrapper for actual Instructions
 
@@ -114,37 +114,49 @@ public class ConstantFolder
 
 				Number leftNum = null;
 				Number rightNum = null;
-				ArithmeticInstruction operator;
-				ConversionInstruction conversionInstruction = null;	// May be null
+				ArithmeticInstruction operator = null;
+				ConversionInstruction conversionInstruction1 = null;	// May be null
+				ConversionInstruction conversionInstruction2 = null;	// May be null
+
+				int idx = 0;
 
 				// Check type of left operand.
-				if (match[0].getInstruction() instanceof ConstantPushInstruction) {
-					leftNum = ((ConstantPushInstruction) match[0].getInstruction()).getValue();
-				} else if (match[0].getInstruction() instanceof LDC) {
-					leftNum = (Number) ((LDC) match[0].getInstruction()).getValue(cpgen);
-				} else if (match[0].getInstruction() instanceof LDC2_W) {
-					leftNum = (Number) ((LDC2_W) match[0].getInstruction()).getValue(cpgen);
+				if (match[idx].getInstruction() instanceof ConstantPushInstruction) {
+					leftNum = ((ConstantPushInstruction) match[idx].getInstruction()).getValue();
+				} else if (match[idx].getInstruction() instanceof LDC) {
+					leftNum = (Number) ((LDC) match[idx].getInstruction()).getValue(cpgen);
+				} else if (match[idx].getInstruction() instanceof LDC2_W) {
+					leftNum = (Number) ((LDC2_W) match[idx].getInstruction()).getValue(cpgen);
+				}
+
+				idx++;
+
+				// [OPTIONAL] Check if optional ConversionInstruction is present.
+				if (match[idx].getInstruction() instanceof ConversionInstruction) {
+					conversionInstruction1 = (ConversionInstruction) match[idx].getInstruction();
+					idx++;
 				}
 
 				// Check type of right operand.
-				if (match[1].getInstruction() instanceof ConstantPushInstruction) {
-					rightNum = ((ConstantPushInstruction) match[1].getInstruction()).getValue();
-				} else if (match[1].getInstruction() instanceof LDC) {
-					rightNum = (Number) ((LDC) match[1].getInstruction()).getValue(cpgen);
-				} else if (match[1].getInstruction() instanceof LDC2_W) {
-					rightNum = (Number) ((LDC2_W) match[1].getInstruction()).getValue(cpgen);
+				if (match[idx].getInstruction() instanceof ConstantPushInstruction) {
+					rightNum = ((ConstantPushInstruction) match[idx].getInstruction()).getValue();
+				} else if (match[idx].getInstruction() instanceof LDC) {
+					rightNum = (Number) ((LDC) match[idx].getInstruction()).getValue(cpgen);
+				} else if (match[idx].getInstruction() instanceof LDC2_W) {
+					rightNum = (Number) ((LDC2_W) match[idx].getInstruction()).getValue(cpgen);
 				}
 
-				// Check if optional ConversionInstruction is present.
-				if (match[2].getInstruction() instanceof ConversionInstruction) {
-					conversionInstruction = (ConversionInstruction) match[2].getInstruction();
+				idx++;
 
-					// match[3] expected to be ArithmeticInstruction, as specified in the pattern.
-					operator = (ArithmeticInstruction) match[3].getInstruction();
-				} else {
-					// Optional ConversionInstruction not present.
-					// match[2] expected to be ArithmeticInstruction, as specified in the pattern.
-					operator = (ArithmeticInstruction) match[2].getInstruction();
+				// [OPTIONAL] Check if optional ConversionInstruction is present.
+				if (match[idx].getInstruction() instanceof ConversionInstruction) {
+					conversionInstruction2 = (ConversionInstruction) match[idx].getInstruction();
+					idx++;
+				}
+
+				// Check operator type
+				if (match[idx].getInstruction() instanceof ArithmeticInstruction) {
+					operator = (ArithmeticInstruction) match[idx].getInstruction();
 				}
 
 				// Assert that we have the right types.
@@ -201,13 +213,8 @@ public class ConstantFolder
 						il.insert(match[0], cpInstruction);*/
 
 						try {
-							// Delete old instructions (LDC, LDC, OP)
-							il.delete(match[0], match[2]);
-
-							// If optional ConversionInstruction was present, delete one more.
-							if (conversionInstruction != null) {
-								il.delete(match[3]);
-							}
+							// Delete old instructions (LDC ConversionInstruction? LDC ConversionInstruction? OP)
+							il.delete(match[0], match[idx]);
 						} catch (TargetLostException e) {
 							for (InstructionHandle target : e.getTargets()) {
 								for (InstructionTargeter targeter : target.getTargeters()) {
@@ -427,39 +434,203 @@ public class ConstantFolder
 	private void doDynamicVariableFolding(ClassGen cgen, ConstantPoolGen cpgen, InstructionList il) {
 		System.out.println("* * Optimization 03: Dynamic Variable Folding --------------");
 
-		// Instantiate a MethodGen from the existing method.
-		InstructionFinder f = new InstructionFinder(il);
+		HashMap<Integer, Number> literalValues = new HashMap<>();
 
-		String pattern = "((StoreInstruction) (Instruction)* (StoreInstruction))";
+		InstructionHandle currentInstructionHandle = il.getStart();
 
-		int maxLocalVariableIndex = getHighestLocalVariableIndex(il);
-		// System.out.println("Highest local variable index is " + maxLocalVariableIndex);
+		boolean hasStoreInstructions = true;
 
-		// Work on optimizing variable in order
-		for (Iterator it = f.search(pattern); it.hasNext(); /* empty increment */) {
+		ArrayList<HandlePair> loopRegions = new ArrayList<>();
+
+		// Look for loops in the code.
+		// Any local variable that is MODIFIED within a loop should no longer be optimized until it is re-assigned OUTSIDE a loop.
+		// If any re-assignment occurs within a loop, delete the associated literalValue in literalValues.
+		il.setPositions(true);
+		InstructionFinder loopFinder = new InstructionFinder(il);
+		String loopPattern = "GotoInstruction";
+		for (Iterator it = loopFinder.search(loopPattern); it.hasNext(); /* empty increment */) {
 			InstructionHandle[] match = (InstructionHandle[]) it.next();
-			// Regions between two similar istores
-			for(int i = 0; i < match.length-1; i++){
-				Instruction startInstruction = match[i].getInstruction();
-				for (int j = i+1; j < match.length; j++){
-					Instruction endInstruction = match[j].getInstruction();
-					if((startInstruction instanceof StoreInstruction) && (endInstruction instanceof StoreInstruction)){
-						if(startInstruction.equals(endInstruction)){
-							System.out.println("Found matching ISTORES!");
-							il.setPositions(true);
-							System.out.println("Intermediet Instructions before folding " + il);
-							System.out.println("I IS :" + i);
-							System.out.println("J IS :" + j);
-							System.out.println("I HANDLE IS :" + match[i]);
-							System.out.println("J HANDLE IS :" + match[j]);
-							doConstantVariableFolding(cgen, cpgen, il, match[i+1], match[j]);
-							il.setPositions(true);
-							System.out.println("Intermediet Instructions after folding " + il);
+
+			InstructionHandle gotoTarget = ((GotoInstruction) match[0].getInstruction()).getTarget();
+
+			loopRegions.add(new HandlePair(gotoTarget, match[0]));
+		}
+
+		do {
+			// Look for the first PushInstruction StoreInstruction instance that we can store in literalValues.
+			InstructionFinder f = new InstructionFinder(il);
+			String pattern = "(LDC | LDC2_W | LDC_W | ConstantPushInstruction) (DSTORE | FSTORE | ISTORE | LSTORE)"; // NOTE: May want to add IINC
+
+			Iterator it = f.search(pattern, currentInstructionHandle);
+			if (it.hasNext()) {
+				InstructionHandle[] match = (InstructionHandle[]) it.next();
+
+				System.out.println("[DYNAMIC] currentInstructionHandle: " + currentInstructionHandle + " match[1] next: " + match[1].getNext());
+
+				// Update currentInstructionHandle to the handle of the StoreInstruction.
+				currentInstructionHandle = match[1];
+
+				/*InstructionHandle nextInstructionHandle2 = match[1].getNext();
+				if (nextInstructionHandle2 != null) {
+					currentInstructionHandle = nextInstructionHandle2;
+				} else {
+					break;
+				}*/
+
+				// match[0] expected to be PushInstruction, as specified in the pattern (it's the superclass of the specified pattern).
+				PushInstruction pushInstruction = (PushInstruction) match[0].getInstruction();
+
+				// match[1] expected to be StoreInstruction, as specified in the pattern.
+				StoreInstruction storeInstruction = (StoreInstruction) match[1].getInstruction();
+
+				int localVariableIndex = storeInstruction.getIndex();
+				Number literalValue = null;
+
+				// Get the constant value pushed.
+				if (pushInstruction instanceof ConstantPushInstruction) {
+					literalValue = ((ConstantPushInstruction) pushInstruction).getValue();
+				} else if (pushInstruction instanceof LDC) {
+					// LDC must be Number since we only accept ILOAD, FLOAD, etc.
+					literalValue = (Number) ((LDC) pushInstruction).getValue(cpgen);
+				} else if (pushInstruction instanceof LDC2_W) {
+					literalValue = ((LDC2_W) pushInstruction).getValue(cpgen);
+				}
+
+				// Assert that we've assigned a value to literalValue.
+				if (literalValue == null) {
+					System.err.format("FATAL: [DYNAMIC] Could not obtain literal value for unknown type %s.\n", pushInstruction.getClass().getSimpleName());
+				}
+
+				System.out.format("[DYNAMIC] pushInstruction: %s storeInstruction: %s index: %d value: %f\n", pushInstruction.getClass().getSimpleName(), storeInstruction.getClass().getSimpleName(), storeInstruction.getIndex(), literalValue.doubleValue());
+
+				// Store the literal value in the literalValues hashmap.
+				literalValues.put(localVariableIndex, literalValue);
+
+				InstructionHandle reassignmentInstructionHandle = null;
+
+				// Look for subsequent StoreInstruction with the SAME index (reassignment)
+				if (currentInstructionHandle.getNext() != null) {
+					String pattern2 = "StoreInstruction | IINC";
+					for (Iterator it2 = f.search(pattern2, currentInstructionHandle.getNext()); it2.hasNext(); /* empty increment */) {
+						InstructionHandle[] match2 = (InstructionHandle[]) it2.next();
+
+						if (match2[0].getInstruction() instanceof StoreInstruction) {
+							if (((StoreInstruction) match2[0].getInstruction()).getIndex() == localVariableIndex) {
+								reassignmentInstructionHandle = match2[0];
+								// If any re-assignment occurs within a loop, delete the associated literalValue in literalValues.
+								for (HandlePair loop : loopRegions) {
+									if (match2[0].getPosition() >= loop.startHandle().getPosition() && match2[0].getPosition() <= loop.endHandle().getPosition()) {
+										literalValues.remove(localVariableIndex);
+									}
+								}
+							}
+						} else if (match2[0].getInstruction() instanceof IINC) {
+							if (((IINC) match2[0].getInstruction()).getIndex() == localVariableIndex) {
+								reassignmentInstructionHandle = match2[0];
+								// If any re-assignment occurs within a loop, delete the associated literalValue in literalValues.
+								for (HandlePair loop : loopRegions) {
+									if (match2[0].getPosition() >= loop.startHandle().getPosition() && match2[0].getPosition() <= loop.endHandle().getPosition()) {
+										literalValues.remove(localVariableIndex);
+									}
+								}
+							}
+						} else {
+							System.err.println("[DYNAMIC] FATAL: Unknown reassignment instruction.");
 						}
 					}
 				}
+
+				// Look for all LoadInstructions BEFORE reassignmentInstructionHandle with the same index and replace with values from literalValues.
+				// If no reassignment, replace until the end.
+				String pattern3 = "LoadInstruction";
+				for (Iterator it3 = f.search(pattern3, currentInstructionHandle); it3.hasNext(); /* empty increment */) {
+					InstructionHandle[] match2 = (InstructionHandle[]) it3.next();
+
+					if (reassignmentInstructionHandle != null && match2[0].getPosition() > reassignmentInstructionHandle.getPosition()) {
+						break;
+					}
+
+					// match2[0] expected to be LoadInstruction, as specified in the pattern.
+					LoadInstruction loadInstruction = (LoadInstruction) match2[0].getInstruction();
+
+					if (loadInstruction.getIndex() != localVariableIndex) {
+						continue;
+					}
+
+					// Check if the index exists in the hashmap.
+					if (literalValues.containsKey(loadInstruction.getIndex())) {
+						// Yes, it does!
+						// Replace the LoadInstruction with the literal value.
+
+						Number literalValueToReplace = literalValues.get(loadInstruction.getIndex());
+
+						Instruction instructionAdded = null;
+
+						if (loadInstruction.getType(cpgen) == Type.INT) {
+							// Always add to the constant pool for now.
+							if (false && Math.abs(literalValueToReplace.intValue()) < Byte.MAX_VALUE) {
+								instructionAdded = new BIPUSH(literalValueToReplace.byteValue());
+							} else if (false && Math.abs(literalValueToReplace.intValue()) < Short.MAX_VALUE) {
+								instructionAdded = new SIPUSH(literalValueToReplace.shortValue());
+							} else {
+								// We need to add to the constant pool.
+								instructionAdded = new LDC(cpgen.addInteger(literalValueToReplace.intValue()));
+							}
+						} else if (loadInstruction.getType(cpgen) == Type.FLOAT) {
+							// Need to add to the constant pool.
+							instructionAdded = new LDC(cpgen.addFloat(literalValueToReplace.floatValue()));
+						} else if (loadInstruction.getType(cpgen) == Type.DOUBLE) {
+							// Need to add to the constant pool.
+							instructionAdded = new LDC2_W(cpgen.addDouble(literalValueToReplace.doubleValue()));
+						} else if (loadInstruction.getType(cpgen) == Type.LONG) {
+							// Need to add to the constant pool.
+							instructionAdded = new LDC2_W(cpgen.addLong(literalValueToReplace.longValue()));
+						}
+
+						// Assert that there's an instruction to add.
+						assert instructionAdded != null;
+
+						InstructionHandle instructionAddedHandle = il.insert(match2[0], instructionAdded);
+
+						try {
+							// Delete old instructions (loadInstruction)
+							il.delete(match2[0]);
+						} catch (TargetLostException e) {
+							for (InstructionHandle target : e.getTargets()) {
+								for (InstructionTargeter targeter : target.getTargeters()) {
+									targeter.updateTarget(target, instructionAddedHandle);
+								}
+							}
+							//e.printStackTrace();
+						}
+
+						il.setPositions(true);
+
+						System.out.format("[DYNAMIC] Replaced %s %d with %s %f.\n", loadInstruction.getClass().getSimpleName(), loadInstruction.getIndex(), instructionAdded.getClass().getSimpleName(), literalValue.doubleValue());
+					}
+				}
+
+				// Do simple folding to collapse all arithmetic operations on literals.
+				doSimpleFolding(cgen, cpgen, il);
+
+				il.setPositions(true);
+
+				InstructionHandle nextInstructionHandle = currentInstructionHandle.getNext();
+				if (nextInstructionHandle != null && nextInstructionHandle.getInstruction() != null) {
+					currentInstructionHandle = nextInstructionHandle;
+				} else {
+					// No more instructions.
+					hasStoreInstructions = false;
+					System.out.println("[DYNAMIC] No more instructions - optimization finished.");
+					break;
+				}
+			} else {
+				// No more PushInstruction StoreInstruction sequences.
+				hasStoreInstructions = false;
+				break;
 			}
-		}
+
+		} while (hasStoreInstructions);
 	}
 
 	// ===========================
@@ -548,5 +719,20 @@ public class ConstantFolder
 			// Auto-generated catch block
 			e.printStackTrace();
 		}
+	}
+
+	class HandlePair
+	{
+		private final InstructionHandle startHandle;
+		private final InstructionHandle endHandle;
+
+		public HandlePair(InstructionHandle start, InstructionHandle end)
+		{
+			startHandle = start;
+			endHandle   = end;
+		}
+
+		public InstructionHandle startHandle()   { return startHandle; }
+		public InstructionHandle endHandle()     { return endHandle; }
 	}
 }
